@@ -7,9 +7,9 @@
 [submodule "dependencies/stb"]
 	path = dependencies/stb
 	url = https://github.com/nothings/stb
-[submodule "dependencies/soil"]
-	path = dependencies/soil
-	url = https://github.com/kbranigan/Simple-OpenGL-Image-Library
 [submodule "dependencies/assimp"]
 	path = dependencies/assimp
 	url = https://github.com/assimp/assimp
+[submodule "dependencies/soil"]
+	path = dependencies/soil
+	url = https://github.com/ajweeks/Simple-OpenGL-Image-Library

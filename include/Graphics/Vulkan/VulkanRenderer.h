@@ -71,7 +71,7 @@ private:
 	void CreateIndexBuffer(VulkanBuffer& indexBuffer, glm::uint shaderIndex);
 	void PrepareUniformBuffers();
 	void CreateDescriptorPool();
-	void AllocateUniformBuffer(size_t dynamicDataSize, void** data);
+	glm::uint AllocateUniformBuffer(size_t dynamicDataSize, UniformBufferData& uniformBufferData); // Returns the allocated size
 	void PrepareUniformBuffer(VulkanBuffer& buffer, glm::uint bufferSize,
 		VkBufferUsageFlags bufferUseageFlagBits, VkMemoryPropertyFlags memoryPropertyHostFlagBits);
 	void CreateDescriptorSet(glm::uint renderID, glm::uint descriptorSetLayoutIndex);
@@ -112,7 +112,7 @@ private:
 	std::vector<const char*> GetRequiredExtensions();
 	bool CheckValidationLayerSupport();
 
-	void UpdateUniformBuffers(const GameContext& gameContext);
+	void UpdateConstantUniformBuffers(const GameContext& gameContext);
 	void UpdateUniformBufferDynamic(const GameContext& gameContext, glm::uint renderID, const glm::mat4& model);
 
 	void LoadDefaultShaderCode();
@@ -173,7 +173,7 @@ private:
 	VDeleter<VkCommandPool> m_CommandPool{ m_Device, vkDestroyCommandPool };
 	std::vector<VkCommandBuffer> m_CommandBuffers;
 
-
+	// TODO: Store a list of every loaded texture rather than these two sets of variables
 	VulkanTexture* m_BrickDiffuseTexture = nullptr;
 	VulkanTexture* m_BrickNormalTexture = nullptr;
 	VulkanTexture* m_BrickSpecularTexture = nullptr;
@@ -202,21 +202,23 @@ private:
 	
 	VkClearColorValue m_ClearColor;
 
-	UniformBuffers_Simple m_UniformBuffers_Simple;
-	UniformBufferObjectData_Simple m_UniformBufferData_Simple;
-	UniformBufferObjectDataDynamic_Simple m_UniformBufferDynamic_Simple;
+	// One per shader
+	std::vector<UniformBufferPair> m_UniformBufferPairs;
 
-	UniformBuffers_Color m_UniformBuffers_Color;
-	UniformBufferObjectData_Color m_UniformBufferData_Color;
-	UniformBufferObjectDataDynamic_Color m_UniformBufferDynamic_Color;
+	struct ShaderFilePath
+	{
+		std::string vertexShaderFilePath;
+		std::string fragmentShaderFilePath;
+	};
 
-	const std::string m_DefaultFragShaderFilePath = "resources/shaders/GLSL/spv/vk_color_frag.spv";
-	const std::string m_DefaultVertShaderFilePath = "resources/shaders/GLSL/spv/vk_color_vert.spv";
+	struct ShaderCode
+	{
+		std::vector<char> vertexShaderCode;
+		std::vector<char> fragmentShaderCode;
+	};
 
-	std::vector<char> m_DefaultVertShaderCode;
-	std::vector<char> m_DefaultFragShaderCode;
-
-	std::map<std::string, std::vector<char>> m_LoadedShaderCode; // filepath and code
+	std::vector<ShaderFilePath> m_ShaderFilePaths;
+	std::vector<ShaderCode> m_LoadedShaderCode;
 
 	VulkanRenderer(const VulkanRenderer&) = delete;
 	VulkanRenderer& operator=(const VulkanRenderer&) = delete;

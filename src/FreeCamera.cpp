@@ -8,7 +8,6 @@
 
 #include <glm\vec2.hpp>
 #include <glm\gtc\matrix_transform.hpp>
-#include <glm\gtx\euler_angles.hpp>
 
 using namespace glm;
 
@@ -157,6 +156,11 @@ void FreeCamera::Translate(glm::vec3 translation)
 void FreeCamera::SetPosition(glm::vec3 position)
 {
 	m_Position = position;
+}
+
+glm::vec3 FreeCamera::GetViewDirection() const
+{
+	return m_Forward;
 }
 
 glm::vec3 FreeCamera::GetPosition() const

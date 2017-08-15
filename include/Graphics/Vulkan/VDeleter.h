@@ -2,6 +2,8 @@
 
 #include <functional>
 
+// Mostly copied from https://github.com/SaschaWillems/Vulkan
+
 template <typename T>
 class VDeleter
 {

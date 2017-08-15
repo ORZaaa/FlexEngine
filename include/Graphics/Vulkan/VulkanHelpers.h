@@ -25,7 +25,7 @@ struct QueueFamilyIndices
 	int graphicsFamily = -1;
 	int presentFamily = -1;
 
-	bool isComplete()
+	bool IsComplete()
 	{
 		return graphicsFamily >= 0 && presentFamily >= 0;
 	}
@@ -42,74 +42,73 @@ struct VulkanVertex
 {
 	static VkVertexInputBindingDescription GetVertexBindingDescription(VertexBufferData* vertexBufferData);
 	static void GetVertexAttributeDescriptions(VertexBufferData* vertexBufferData, 
-		std::vector<VkVertexInputAttributeDescription>& vec, glm::uint type);
+		std::vector<VkVertexInputAttributeDescription>& vec, glm::uint shaderIndex);
 };
 
-struct UniformBuffers_Simple
+struct Uniform
 {
-	UniformBuffers_Simple(const VDeleter<VkDevice>& device);
-
-	VulkanBuffer viewBuffer;
-	VulkanBuffer dynamicBuffer;
-};
-
-struct UniformBuffers_Color
-{
-	UniformBuffers_Color(const VDeleter<VkDevice>& device);
-
-	VulkanBuffer viewBuffer;
-	VulkanBuffer dynamicBuffer;
-};
-
-struct UniformBufferObjectData_Simple
-{
-	glm::mat4 projection;
-	glm::mat4 view;
-	glm::vec4 camPos;
-	glm::vec4 lightDir;
-	glm::vec4 ambientColor;
-	glm::vec4 specularColor;
-	glm::int32 useDiffuseTexture;
-	glm::int32 useNormalTexture;
-	glm::int32 useSpecularTexture;
-};
-
-struct UniformBufferObjectData_Color
-{
-	glm::mat4 viewProjection;
-};
-
-struct UniformBufferObjectDataDynamic_Simple
-{
-	struct Data
+	enum Type : glm::uint
 	{
-		glm::mat4 model;
-		glm::mat4 modelInvTranspose;
+		NONE =							0,
+		PROJECTION_MAT4 =				(1 << 0),
+		VIEW_MAT4 =						(1 << 1),
+		VIEW_INV_MAT4 =					(1 << 2),
+		VIEW_PROJECTION_MAT4 =			(1 << 3),
+		MODEL_MAT4 =					(1 << 4),
+		MODEL_INV_TRANSPOSE_MAT4 =		(1 << 5),
+		MODEL_VIEW_PROJECTION_MAT4 =	(1 << 6),
+		CAM_POS_VEC4 =					(1 << 7),
+		VIEW_DIR_VEC4 =					(1 << 8),
+		LIGHT_DIR_VEC4 =				(1 << 9),
+		AMBIENT_COLOR_VEC4 =			(1 << 10),
+		SPECULAR_COLOR_VEC4 =			(1 << 11),
+		USE_DIFFUSE_TEXTURE_INT =		(1 << 12),
+		USE_NORMAL_TEXTURE_INT =		(1 << 13),
+		USE_SPECULAR_TEXTURE_INT =		(1 << 14)
 	};
 
-	constexpr static size_t size = sizeof(Data);
-	Data* data;
+	static bool HasUniform(Type elements, Type uniform);
+	static glm::uint CalculateSize(Type elements);
 };
 
-struct UniformBufferObjectDataDynamic_Color
+struct UniformBufferData
 {
-	struct Data
-	{
-		glm::mat4 model;
-	};
+	Uniform::Type elements;
+	void* data;
+	glm::uint size; // How many bytes data is allocated for
 
-	constexpr static size_t size = sizeof(Data);
-	Data* data;
+	//glm::mat4 projection;
+	//glm::mat4 view;
+	//glm::vec4 camPos;
+	//glm::vec4 lightDir;
+	//glm::vec4 ambientColor;
+	//glm::vec4 specularColor;
+	//glm::int32 useDiffuseTexture;
+	//glm::int32 useNormalTexture;
+	//glm::int32 useSpecularTexture;
+
+	//glm::mat4 model;
+	//glm::mat4 modelInvTranspose;
+};
+
+struct UniformBufferPair
+{
+	UniformBufferPair(const VDeleter<VkDevice>& device);
+
+	VulkanBuffer constantBuffer;
+	VulkanBuffer dynamicBuffer;
+	UniformBufferData constantBufferData;
+	UniformBufferData dynamicBufferData;
 };
 
 struct VulkanTexture
 {
 	VulkanTexture(const VDeleter<VkDevice>& device);
 
-	VDeleter<VkImage> Image;
-	VDeleter<VkDeviceMemory> ImageMemory;
-	VDeleter<VkImageView> ImageView;
-	VDeleter<VkSampler> Sampler;
+	VDeleter<VkImage> image;
+	VDeleter<VkDeviceMemory> imageMemory;
+	VDeleter<VkImageView> imageView;
+	VDeleter<VkSampler> sampler;
 };
 
 struct RenderObject
@@ -131,25 +130,21 @@ struct RenderObject
 	std::vector<glm::uint>* indices = nullptr;
 	glm::uint indexOffset = 0;
 
-	std::string fragShaderFilePath;
-	std::string vertShaderFilePath;
+	glm::uint shaderIndex;
+	glm::uint uniformBufferObjectIndex; // Stores how far into our uniform buffer pair we are
+
+	VulkanTexture* diffuseTexture = nullptr;
+	VulkanTexture* normalTexture = nullptr;
+	VulkanTexture* specularTexture = nullptr;
 
 	glm::uint descriptorSetLayoutIndex;
-
-	glm::uint shaderIndex;
-
-	VulkanTexture* m_DiffuseTexture = nullptr;
-	VulkanTexture* m_NormalTexture = nullptr;
-	VulkanTexture* m_SpecularTexture = nullptr;
-
-	VkDescriptorSet m_DescriptorSet;
+	VkDescriptorSet descriptorSet;
 
 	VDeleter<VkPipelineLayout> pipelineLayout;
 	VDeleter<VkPipeline> graphicsPipeline;
 };
 
 typedef std::vector<RenderObject*>::iterator RenderObjectIter;
-
 
 VkResult CreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo,
 	const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback);

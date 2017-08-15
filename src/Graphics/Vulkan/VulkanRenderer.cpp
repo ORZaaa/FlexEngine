@@ -25,8 +25,6 @@ VulkanRenderer::VulkanRenderer(GameContext& gameContext) :
 	m_IndexBuffer_Simple(m_Device),
 	m_VertexBuffer_Color(m_Device),
 	m_IndexBuffer_Color(m_Device),
-	m_UniformBuffers_Simple(m_Device),
-	m_UniformBuffers_Color(m_Device),
 	m_DynamicAlignment(0)
 {
 	CreateInstance(gameContext);
@@ -109,15 +107,15 @@ void VulkanRenderer::PostInitialize()
 		{
 			if (i % 2 == 0)
 			{
-				renderObject->m_DiffuseTexture = m_BrickDiffuseTexture;
-				renderObject->m_NormalTexture = m_BrickNormalTexture;
-				renderObject->m_SpecularTexture = m_BrickSpecularTexture;
+				renderObject->diffuseTexture = m_BrickDiffuseTexture;
+				renderObject->normalTexture = m_BrickNormalTexture;
+				renderObject->specularTexture = m_BrickSpecularTexture;
 			}
 			else
 			{
-				renderObject->m_DiffuseTexture = m_WorkDiffuseTexture;
-				renderObject->m_NormalTexture = m_WorkNormalTexture;
-				renderObject->m_SpecularTexture = m_WorkSpecularTexture;
+				renderObject->diffuseTexture = m_WorkDiffuseTexture;
+				renderObject->normalTexture = m_WorkNormalTexture;
+				renderObject->specularTexture = m_WorkSpecularTexture;
 			}
 		}
 		else
@@ -146,20 +144,12 @@ VulkanRenderer::~VulkanRenderer()
 	auto iter = m_RenderObjects.begin();
 	while (iter != m_RenderObjects.end())
 	{
+		UniformBufferData* dynamicUniformBufferData = &m_UniformBufferPairs[(*iter)->shaderIndex].dynamicBufferData;
+		_aligned_free(dynamicUniformBufferData->data);
 		SafeDelete(*iter);
 		iter = m_RenderObjects.erase(iter);
 	}
 	m_RenderObjects.clear();
-
-	if (m_UniformBufferDynamic_Simple.data)
-	{
-		_aligned_free(m_UniformBufferDynamic_Simple.data);
-	}
-
-	if (m_UniformBufferDynamic_Color.data)
-	{
-		_aligned_free(m_UniformBufferDynamic_Color.data);
-	}
 
 	for (auto iter = m_DescriptorSetLayouts.begin(); iter != m_DescriptorSetLayouts.end(); ++iter)
 	{
@@ -195,16 +185,6 @@ glm::uint VulkanRenderer::Initialize(const GameContext& gameContext, const Rende
 
 	renderObject->descriptorSetLayoutIndex = renderID;
 	renderObject->shaderIndex = createInfo->shaderIndex;
-	if (createInfo->shaderIndex == 0)
-	{
-		renderObject->vertShaderFilePath = "resources/shaders/GLSL/spv/vk_simple_vert.spv";
-		renderObject->fragShaderFilePath = "resources/shaders/GLSL/spv/vk_simple_frag.spv";
-	}
-	else
-	{
-		renderObject->vertShaderFilePath = "resources/shaders/GLSL/spv/vk_color_vert.spv";
-		renderObject->fragShaderFilePath = "resources/shaders/GLSL/spv/vk_color_frag.spv";
-	}
 
 	return renderID;
 }
@@ -232,7 +212,7 @@ void VulkanRenderer::SetClearColor(float r, float g, float b)
 void VulkanRenderer::Update(const GameContext& gameContext)
 {
 	// Update uniform buffer
-	UpdateUniformBuffers(gameContext);
+	UpdateConstantUniformBuffers(gameContext);
 
 	// TODO: Only call this when objects change
 	RebuildCommandBuffers();
@@ -555,7 +535,7 @@ void VulkanRenderer::CreateImageViews()
 
 void VulkanRenderer::CreateTextureImageView(VulkanTexture* texture)
 {
-	CreateImageView(texture->Image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, texture->ImageView);
+	CreateImageView(texture->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, texture->imageView);
 }
 
 void VulkanRenderer::CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, VDeleter<VkImageView>& imageView)
@@ -652,57 +632,16 @@ void VulkanRenderer::CreateTextureSampler(VulkanTexture* texture)
 	samplerInfo.minLod = 0.0f;
 	samplerInfo.maxLod = 0.0f;
 
-	VK_CHECK_RESULT(vkCreateSampler(m_Device, &samplerInfo, nullptr, texture->Sampler.replace()));
+	VK_CHECK_RESULT(vkCreateSampler(m_Device, &samplerInfo, nullptr, texture->sampler.replace()));
 }
 
 void VulkanRenderer::CreateGraphicsPipeline(glm::uint renderID)
 {
 	RenderObject* renderObject = GetRenderObject(renderID);
 
-	std::vector<char> vertShaderCode;
-	std::vector<char> fragShaderCode;
-
-	if (renderObject->vertShaderFilePath.empty())
-	{
-		// Filepath not given, use default shader
-		vertShaderCode = m_DefaultVertShaderCode;
-	}
-	else
-	{
-		auto iter = m_LoadedShaderCode.find(renderObject->vertShaderFilePath);
-		if (iter == m_LoadedShaderCode.end())
-		{
-			// Load code for first time
-			vertShaderCode = ReadFile(renderObject->vertShaderFilePath);
-		}
-		else
-		{
-			// Use already loaded code
-			vertShaderCode = iter->second;
-		}
-	}
-
-	if (renderObject->fragShaderFilePath.empty())
-	{
-		// Filepath not given, use default shader
-		fragShaderCode = m_DefaultFragShaderCode;
-	}
-	else
-	{
-		auto iter = m_LoadedShaderCode.find(renderObject->fragShaderFilePath);
-		if (iter == m_LoadedShaderCode.end())
-		{
-			// Load code for first time
-			fragShaderCode = ReadFile(renderObject->fragShaderFilePath);
-
-			m_LoadedShaderCode.insert({ renderObject->fragShaderFilePath, fragShaderCode });
-		}
-		else
-		{
-			// Use already loaded code
-			fragShaderCode = iter->second;
-		}
-	}
+	ShaderCode shaderCode = m_LoadedShaderCode[renderObject->shaderIndex];
+	std::vector<char> vertShaderCode = shaderCode.vertexShaderCode;
+	std::vector<char> fragShaderCode = shaderCode.fragmentShaderCode;
 
 	VDeleter<VkShaderModule> vertShaderModule{ m_Device, vkDestroyShaderModule };
 	CreateShaderModule(vertShaderCode, vertShaderModule);
@@ -726,8 +665,7 @@ void VulkanRenderer::CreateGraphicsPipeline(glm::uint renderID)
 
 	VkVertexInputBindingDescription bindingDescription = VulkanVertex::GetVertexBindingDescription(renderObject->vertexBufferData);
 	std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
-	VulkanVertex::GetVertexAttributeDescriptions(renderObject->vertexBufferData, attributeDescriptions, 
-		renderObject->fragShaderFilePath == m_DefaultFragShaderFilePath ? 2 : 1);
+	VulkanVertex::GetVertexAttributeDescriptions(renderObject->vertexBufferData, attributeDescriptions, renderObject->shaderIndex);
 
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1032,11 +970,11 @@ void VulkanRenderer::CreateTextureImage(const std::string& filePath, VulkanTextu
 
 	CreateImage(textureWidth, textureHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
 		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
-		(*texture)->Image, (*texture)->ImageMemory);
+		(*texture)->image, (*texture)->imageMemory);
 
-	TransitionImageLayout((*texture)->Image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_PREINITIALIZED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-	CopyBufferToImage(stagingBuffer.m_Buffer, (*texture)->Image, (uint32_t)textureWidth, (uint32_t)textureHeight);
-	TransitionImageLayout((*texture)->Image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	TransitionImageLayout((*texture)->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_PREINITIALIZED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	CopyBufferToImage(stagingBuffer.m_Buffer, (*texture)->image, (uint32_t)textureWidth, (uint32_t)textureHeight);
+	TransitionImageLayout((*texture)->image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 void VulkanRenderer::RebuildCommandBuffers()
@@ -1097,9 +1035,9 @@ void VulkanRenderer::BuildCommandBuffers()
 
 		for (size_t j = 0; j < m_RenderObjects.size(); j++)
 		{
-			uint32_t dynamicOffset = j * static_cast<uint32_t>(m_DynamicAlignment);
-
 			RenderObject* renderObject = m_RenderObjects[j];
+
+			uint32_t dynamicOffset = renderObject->uniformBufferObjectIndex * static_cast<uint32_t>(m_DynamicAlignment);
 
 			VkDeviceSize offsets[1] = { 0 };
 			if (renderObject->shaderIndex == 0)
@@ -1124,7 +1062,7 @@ void VulkanRenderer::BuildCommandBuffers()
 			vkCmdBindPipeline(m_CommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, renderObject->graphicsPipeline);
 
 			vkCmdBindDescriptorSets(m_CommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, renderObject->pipelineLayout,
-				0, 1, &renderObject->m_DescriptorSet,
+				0, 1, &renderObject->descriptorSet,
 				1, &dynamicOffset);
 
 			if (renderObject->indexed)
@@ -1290,7 +1228,8 @@ void VulkanRenderer::CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t 
 	EndSingleTimeCommands(commandBuffer);
 }
 
-void VulkanRenderer::CreateAndAllocateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VulkanBuffer& buffer)
+void VulkanRenderer::CreateAndAllocateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, 
+	VkMemoryPropertyFlags properties, VulkanBuffer& buffer)
 {
 	VkBufferCreateInfo bufferInfo = {};
 	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1444,28 +1383,63 @@ void VulkanRenderer::CreateIndexBuffer(VulkanBuffer& indexBuffer, glm::uint shad
 
 void VulkanRenderer::PrepareUniformBuffers()
 {
-	AllocateUniformBuffer(UniformBufferObjectDataDynamic_Simple::size, (void**)&m_UniformBufferDynamic_Simple.data);
-	AllocateUniformBuffer(UniformBufferObjectDataDynamic_Color::size, (void**)&m_UniformBufferDynamic_Color.data);
+	std::vector<glm::uint> shaderIndexCount(m_LoadedShaderCode.size(), 0); // Stores how many of each render object use each shader
+	for (size_t i = 0; i < m_RenderObjects.size(); i++)
+	{
+		const glm::uint shaderIndex = m_RenderObjects[i]->shaderIndex;
+		m_RenderObjects[i]->uniformBufferObjectIndex = shaderIndexCount[shaderIndex]++;
+	}
 
-	// TODO: JANK: This should be changed, no? Used to be just sizeof(m_UniformBufferData)
-	const size_t bufferSize = m_DynamicAlignment * m_RenderObjects.size();
+	// One uniform buffer pair for each shader
+	m_UniformBufferPairs.resize(m_LoadedShaderCode.size(), { m_Device });
 
 	// Simple
-	PrepareUniformBuffer(m_UniformBuffers_Simple.viewBuffer, bufferSize, /* sizeof(m_UniformBufferData_Simple), */
-		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	glm::uint shaderIndex = 0;
+	m_UniformBufferPairs[shaderIndex].constantBufferData.elements = Uniform::Type(
+		Uniform::Type::PROJECTION_MAT4 |
+		Uniform::Type::VIEW_MAT4 |
+		Uniform::Type::CAM_POS_VEC4 |
+		Uniform::Type::LIGHT_DIR_VEC4 |
+		Uniform::Type::AMBIENT_COLOR_VEC4 |
+		Uniform::Type::SPECULAR_COLOR_VEC4 |
+		Uniform::Type::USE_DIFFUSE_TEXTURE_INT |
+		Uniform::Type::USE_NORMAL_TEXTURE_INT |
+		Uniform::Type::USE_SPECULAR_TEXTURE_INT);
 
-	PrepareUniformBuffer(m_UniformBuffers_Simple.dynamicBuffer, bufferSize, /* sizeof(m_UniformBufferData_Simple), */
-		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+	m_UniformBufferPairs[shaderIndex].dynamicBufferData.elements = Uniform::Type(
+		Uniform::Type::MODEL_MAT4 | 
+		Uniform::Type::MODEL_INV_TRANSPOSE_MAT4);
 
 	// Color
-	PrepareUniformBuffer(m_UniformBuffers_Color.viewBuffer, bufferSize, /* sizeof(m_UniformBufferData_Color), */
-		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	shaderIndex = 1;
+	m_UniformBufferPairs[shaderIndex].constantBufferData.elements = Uniform::Type(
+		Uniform::Type::VIEW_PROJECTION_MAT4);
 
-	PrepareUniformBuffer(m_UniformBuffers_Color.dynamicBuffer, bufferSize, /* sizeof(m_UniformBufferData_Color), */
-		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+	m_UniformBufferPairs[shaderIndex].dynamicBufferData.elements = Uniform::Type(
+		Uniform::Type::MODEL_MAT4);
+
+	for (size_t i = 0; i < m_UniformBufferPairs.size(); i++)
+	{
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[i];
+
+		const glm::uint dynamicBufferSize = Uniform::CalculateSize(uniformBufferPair.dynamicBufferData.elements);
+		const glm::uint allocatedDynamicBufferSize = AllocateUniformBuffer(dynamicBufferSize, uniformBufferPair.dynamicBufferData);
+
+		const glm::uint constantBufferSize = Uniform::CalculateSize(uniformBufferPair.constantBufferData.elements);
+		const glm::uint allocatedConstantBufferSize = AllocateUniformBuffer(constantBufferSize, uniformBufferPair.constantBufferData);
+
+		// TODO: JANK: This should be changed, no? Used to be just sizeof(m_UniformBufferData)
+		//const size_t bufferSize = m_DynamicAlignment * m_RenderObjects.size();
+
+		PrepareUniformBuffer(uniformBufferPair.dynamicBuffer, allocatedDynamicBufferSize, /* sizeof(m_UniformBufferData), */
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+		PrepareUniformBuffer(uniformBufferPair.constantBuffer, allocatedConstantBufferSize, /* sizeof(m_UniformBufferData), */
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	}
 }
 
-void VulkanRenderer::AllocateUniformBuffer(size_t dynamicDataSize, void** data)
+glm::uint VulkanRenderer::AllocateUniformBuffer(size_t dynamicDataSize, UniformBufferData& uniformBufferData)
 {
 	size_t uboAlignment = (size_t)m_PhysicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
 	glm::uint dynamicAllignment = 
@@ -1477,10 +1451,14 @@ void VulkanRenderer::AllocateUniformBuffer(size_t dynamicDataSize, void** data)
 		m_DynamicAlignment = dynamicAllignment;
 	}
 
-	size_t dynamicBufferSize = m_RenderObjects.size() * m_DynamicAlignment;
+	size_t dynamicBufferSize = m_DynamicAlignment;
 
-	(*data) = _aligned_malloc(dynamicBufferSize, m_DynamicAlignment);
-	assert(*data);
+	uniformBufferData.data = _aligned_malloc(dynamicBufferSize, m_DynamicAlignment);
+	assert(uniformBufferData.data);
+
+	uniformBufferData.size = dynamicBufferSize;
+
+	return dynamicBufferSize;
 }
 
 void VulkanRenderer::PrepareUniformBuffer(VulkanBuffer& buffer, glm::uint bufferSize,
@@ -1493,6 +1471,7 @@ void VulkanRenderer::PrepareUniformBuffer(VulkanBuffer& buffer, glm::uint buffer
 
 void VulkanRenderer::CreateDescriptorPool()
 {
+	// TODO: Use more accurate count here (plus extra for new objects?)
 	const size_t descriptorSetCount = m_RenderObjects.size();
 
 	std::array<VkDescriptorPoolSize, 5> poolSizes = {};
@@ -1532,19 +1511,21 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 	allocInfo.descriptorSetCount = 1;
 	allocInfo.pSetLayouts = layouts;
 
-	VK_CHECK_RESULT(vkAllocateDescriptorSets(m_Device, &allocInfo, &renderObject->m_DescriptorSet));
+	VK_CHECK_RESULT(vkAllocateDescriptorSets(m_Device, &allocInfo, &renderObject->descriptorSet));
 
-
-	if (renderObject->m_DiffuseTexture != nullptr)
+	// TODO: Do this automatically using HasAttribute
+	if (renderObject->diffuseTexture != nullptr)
 	{
 		std::array<VkWriteDescriptorSet, 5> writeDescriptorSets = {};
 
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[renderObject->shaderIndex];
+
 		VkDescriptorBufferInfo uniformBufferInfo = {};
-		uniformBufferInfo.buffer = m_UniformBuffers_Simple.viewBuffer.m_Buffer;
-		uniformBufferInfo.range = sizeof(UniformBufferObjectData_Simple);
+		uniformBufferInfo.buffer = uniformBufferPair.constantBuffer.m_Buffer;
+		uniformBufferInfo.range = Uniform::CalculateSize(uniformBufferPair.constantBufferData.elements);
 
 		writeDescriptorSets[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[0].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[0].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[0].dstBinding = 0;
 		writeDescriptorSets[0].dstArrayElement = 0;
 		writeDescriptorSets[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1552,11 +1533,11 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 		writeDescriptorSets[0].pBufferInfo = &uniformBufferInfo;
 
 		VkDescriptorBufferInfo uniformBufferDynamicInfo = {};
-		uniformBufferDynamicInfo.buffer = m_UniformBuffers_Simple.dynamicBuffer.m_Buffer;
-		uniformBufferDynamicInfo.range = sizeof(UniformBufferObjectDataDynamic_Simple) * m_RenderObjects.size();
+		uniformBufferDynamicInfo.buffer = uniformBufferPair.dynamicBuffer.m_Buffer;
+		uniformBufferDynamicInfo.range = Uniform::CalculateSize(uniformBufferPair.dynamicBufferData.elements);
 
 		writeDescriptorSets[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[1].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[1].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[1].dstBinding = 1;
 		writeDescriptorSets[1].dstArrayElement = 0;
 		writeDescriptorSets[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -1565,11 +1546,11 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 
 		VkDescriptorImageInfo diffuseImageInfo = {};
 		diffuseImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		diffuseImageInfo.imageView = renderObject->m_DiffuseTexture->ImageView;
-		diffuseImageInfo.sampler = renderObject->m_DiffuseTexture->Sampler;
+		diffuseImageInfo.imageView = renderObject->diffuseTexture->imageView;
+		diffuseImageInfo.sampler = renderObject->diffuseTexture->sampler;
 
 		writeDescriptorSets[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[2].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[2].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[2].dstBinding = 2;
 		writeDescriptorSets[2].dstArrayElement = 0;
 		writeDescriptorSets[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1578,11 +1559,11 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 
 		VkDescriptorImageInfo normalImageInfo = {};
 		normalImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		normalImageInfo.imageView = renderObject->m_NormalTexture->ImageView;
-		normalImageInfo.sampler = renderObject->m_NormalTexture->Sampler;
+		normalImageInfo.imageView = renderObject->normalTexture->imageView;
+		normalImageInfo.sampler = renderObject->normalTexture->sampler;
 
 		writeDescriptorSets[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[3].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[3].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[3].dstBinding = 3;
 		writeDescriptorSets[3].dstArrayElement = 0;
 		writeDescriptorSets[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1591,11 +1572,11 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 
 		VkDescriptorImageInfo specularImageInfo = {};
 		specularImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		specularImageInfo.imageView = renderObject->m_SpecularTexture->ImageView;
-		specularImageInfo.sampler = renderObject->m_SpecularTexture->Sampler;
+		specularImageInfo.imageView = renderObject->specularTexture->imageView;
+		specularImageInfo.sampler = renderObject->specularTexture->sampler;
 
 		writeDescriptorSets[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[4].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[4].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[4].dstBinding = 4;
 		writeDescriptorSets[4].dstArrayElement = 0;
 		writeDescriptorSets[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1608,12 +1589,14 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 	{
 		std::array<VkWriteDescriptorSet, 2> writeDescriptorSets = {};
 
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[renderObject->shaderIndex];
+
 		VkDescriptorBufferInfo uniformBufferInfo = {};
-		uniformBufferInfo.buffer = m_UniformBuffers_Color.viewBuffer.m_Buffer;
-		uniformBufferInfo.range = sizeof(UniformBufferObjectData_Color);
+		uniformBufferInfo.buffer = uniformBufferPair.constantBuffer.m_Buffer;
+		uniformBufferInfo.range = Uniform::CalculateSize(uniformBufferPair.constantBufferData.elements);
 
 		writeDescriptorSets[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[0].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[0].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[0].dstBinding = 0;
 		writeDescriptorSets[0].dstArrayElement = 0;
 		writeDescriptorSets[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1621,11 +1604,11 @@ void VulkanRenderer::CreateDescriptorSet(glm::uint renderID, glm::uint descripto
 		writeDescriptorSets[0].pBufferInfo = &uniformBufferInfo;
 
 		VkDescriptorBufferInfo uniformBufferDynamicInfo = {};
-		uniformBufferDynamicInfo.buffer = m_UniformBuffers_Color.dynamicBuffer.m_Buffer;
-		uniformBufferDynamicInfo.range = sizeof(UniformBufferObjectDataDynamic_Color) * m_RenderObjects.size();
+		uniformBufferDynamicInfo.buffer = uniformBufferPair.dynamicBuffer.m_Buffer;
+		uniformBufferDynamicInfo.range = Uniform::CalculateSize(uniformBufferPair.dynamicBufferData.elements);
 
 		writeDescriptorSets[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		writeDescriptorSets[1].dstSet = renderObject->m_DescriptorSet;
+		writeDescriptorSets[1].dstSet = renderObject->descriptorSet;
 		writeDescriptorSets[1].dstBinding = 1;
 		writeDescriptorSets[1].dstArrayElement = 0;
 		writeDescriptorSets[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -1909,7 +1892,7 @@ bool VulkanRenderer::IsDeviceSuitable(VkPhysicalDevice device)
 	VkPhysicalDeviceFeatures supportedFeatures;
 	vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
 	
-	return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
+	return indices.IsComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 }
 
 bool VulkanRenderer::CheckDeviceExtensionSupport(VkPhysicalDevice device)
@@ -1956,7 +1939,7 @@ QueueFamilyIndices VulkanRenderer::FindQueueFamilies(VkPhysicalDevice device)
 			indices.presentFamily = i;
 		}
 
-		if (indices.isComplete())
+		if (indices.IsComplete())
 		{
 			break;
 		}
@@ -2018,64 +2001,175 @@ bool VulkanRenderer::CheckValidationLayerSupport()
 	return true;
 }
 
-void VulkanRenderer::UpdateUniformBuffers(const GameContext& gameContext)
+void VulkanRenderer::UpdateConstantUniformBuffers(const GameContext& gameContext)
 {
 	glm::mat4 proj = gameContext.camera->GetProjection();
 	glm::mat4 view = gameContext.camera->GetView();
+	glm::mat4 viewInv = glm::inverse(view);
+	glm::mat4 viewProjection = view * proj;
 	glm::vec4 camPos = glm::vec4(gameContext.camera->GetPosition(), 0.0f);
+	glm::vec4 viewDir = glm::vec4(gameContext.camera->GetViewDirection(), 0.0f);
 
-	// Simple
-	m_UniformBufferData_Simple.projection = proj;
-	m_UniformBufferData_Simple.view = view;
-	m_UniformBufferData_Simple.camPos = camPos;
-	m_UniformBufferData_Simple.lightDir = m_SceneInfo.m_LightDir;
-	m_UniformBufferData_Simple.ambientColor = m_SceneInfo.m_AmbientColor;
-	m_UniformBufferData_Simple.specularColor = m_SceneInfo.m_SpecularColor;
-	m_UniformBufferData_Simple.useDiffuseTexture = 1;
-	m_UniformBufferData_Simple.useNormalTexture = 1;
-	m_UniformBufferData_Simple.useSpecularTexture = 1;
-	memcpy(m_UniformBuffers_Simple.viewBuffer.m_Mapped, &m_UniformBufferData_Simple, sizeof(m_UniformBufferData_Simple));
+	for (size_t i = 0; i < m_UniformBufferPairs.size(); i++)
+	{
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[i];
+	
+		float* dataStart = (float*)uniformBufferPair.constantBufferData.data;
+		float* data = dataStart;
+		 
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::PROJECTION_MAT4))
+		{
+			*((glm::mat4*)data) = proj;
+			data += 16;
+		}
 
-	// Color
-	m_UniformBufferData_Color.viewProjection = proj * view;
-	memcpy(m_UniformBuffers_Color.viewBuffer.m_Mapped, &m_UniformBufferData_Color, sizeof(m_UniformBufferData_Color));
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::VIEW_MAT4))
+		{
+			*((glm::mat4*)data) = view;
+			data += 16;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::VIEW_INV_MAT4))
+		{
+			*((glm::mat4*)data) = viewInv;
+			data += 16;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::VIEW_PROJECTION_MAT4))
+		{
+			*((glm::mat4*)data) = viewProjection;
+			data += 16;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::MODEL_MAT4))
+		{
+			Logger::LogError("Constant uniform buffer contains model matrix, which should be in the dynamic uniform buffer");
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::MODEL_INV_TRANSPOSE_MAT4))
+		{
+			Logger::LogError("Constant uniform buffer contains modelInvTranspose matrix, which should be in the dynamic uniform buffer");
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::MODEL_VIEW_PROJECTION_MAT4))
+		{
+			*((glm::mat4*)data) = view;
+			data += 16;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::CAM_POS_VEC4))
+		{
+			*((glm::vec4*)data) = camPos;
+			data += 4;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::VIEW_DIR_VEC4))
+		{
+			*((glm::vec4*)data) = viewDir;
+			data += 4;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::LIGHT_DIR_VEC4))
+		{
+			*((glm::vec4*)data) = m_SceneInfo.m_LightDir;
+			data += 4;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::AMBIENT_COLOR_VEC4))
+		{
+			*((glm::vec4*)data) = m_SceneInfo.m_AmbientColor;
+			data += 4;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::SPECULAR_COLOR_VEC4))
+		{
+			*((glm::vec4*)data) = m_SceneInfo.m_SpecularColor;
+			data += 4;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::USE_DIFFUSE_TEXTURE_INT))
+		{
+			*((glm::int32*)data) = 1;
+			data += 1;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::USE_NORMAL_TEXTURE_INT))
+		{
+			*((glm::int32*)data) = 1;
+			data += 1;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.constantBufferData.elements, Uniform::Type::USE_SPECULAR_TEXTURE_INT))
+		{
+			*((glm::int32*)data) = 1;
+			data += 1;
+		}
+
+		glm::uint countedSize = sizeof(float) * (data - dataStart);
+		glm::uint calculatedSize = Uniform::CalculateSize(uniformBufferPair.constantBufferData.elements);
+	
+		if (countedSize != calculatedSize) Logger::LogWarning("Counted size does not equal calculated size! " + 
+			std::to_string(countedSize) + " != " + std::to_string(calculatedSize));
+
+		glm::uint size = uniformBufferPair.constantBufferData.size;
+
+		memcpy(uniformBufferPair.constantBuffer.m_Mapped, 
+			&uniformBufferPair.constantBufferData.data,
+			size);
+	}
 }
 
 void VulkanRenderer::UpdateUniformBufferDynamic(const GameContext& gameContext, glm::uint renderID, const glm::mat4& model)
 {
-	// Simple
+	glm::mat4 modelInvTranspose = glm::transpose(glm::inverse(model));
+
+	// Starts pointing at the start of each dynamic uniform buffer, then gets incremented
+	// as we loop through the render objects and stores where to store the next bytes
+	std::vector<float*> dynamicUniformBufferDataPtrs;
+
+	const size_t uniformCount = m_UniformBufferPairs.size();
+	dynamicUniformBufferDataPtrs.reserve(uniformCount);
+	for (size_t i = 0; i < uniformCount; i++)
 	{
-		m_UniformBufferDynamic_Simple.data[renderID].model = model;
-		m_UniformBufferDynamic_Simple.data[renderID].modelInvTranspose = glm::transpose(glm::inverse(model));
-
-		// Aligned offset
-		size_t size = m_UniformBufferDynamic_Simple.size * m_RenderObjects.size();
-		void* firstIndex = m_UniformBuffers_Simple.dynamicBuffer.m_Mapped;
-		uint64_t dest = (uint64_t)firstIndex + (renderID * m_DynamicAlignment);
-		memcpy((void*)(dest), &m_UniformBufferDynamic_Simple.data[renderID], size);
-
-		// Flush to make changes visible to the host 
-		VkMappedMemoryRange mappedMemoryRange{};
-		mappedMemoryRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-		mappedMemoryRange.memory = m_UniformBuffers_Simple.dynamicBuffer.m_Memory;
-		mappedMemoryRange.size = size;
-		vkFlushMappedMemoryRanges(m_Device, 1, &mappedMemoryRange);
+		dynamicUniformBufferDataPtrs.push_back((float*)m_UniformBufferPairs[i].dynamicBufferData.data);
 	}
 
-	// Color
+	for (size_t i = 0; i < m_RenderObjects.size(); i++)
 	{
-		m_UniformBufferDynamic_Color.data[renderID].model = model;
+		RenderObject* renderObject = m_RenderObjects[i];
+
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[renderObject->shaderIndex];
+
+		float** data = &dynamicUniformBufferDataPtrs[renderObject->shaderIndex];
+
+		if (Uniform::HasUniform(uniformBufferPair.dynamicBufferData.elements, Uniform::Type::MODEL_MAT4))
+		{
+			*((glm::mat4*)*data) = model;
+			*data += 16;
+		}
+
+		if (Uniform::HasUniform(uniformBufferPair.dynamicBufferData.elements, Uniform::Type::MODEL_INV_TRANSPOSE_MAT4))
+		{
+			*((glm::mat4*)*data) = modelInvTranspose;
+			*data += 16;
+		}
+	}
+
+	for (size_t i = 0; i < m_UniformBufferPairs.size(); i++)
+	{
+		UniformBufferPair& uniformBufferPair = m_UniformBufferPairs[i];
 
 		// Aligned offset
-		size_t size = m_UniformBufferDynamic_Color.size * m_RenderObjects.size();
-		void* firstIndex = m_UniformBuffers_Color.dynamicBuffer.m_Mapped;
-		uint64_t dest = (uint64_t)firstIndex + (renderID * m_DynamicAlignment);
-		memcpy((void*)(dest), &m_UniformBufferDynamic_Color.data[renderID], size);
+		glm::uint calculatedSize = Uniform::CalculateSize(uniformBufferPair.dynamicBufferData.elements);
+		size_t size = calculatedSize;// *m_RenderObjects.size();
+		void* firstIndex = uniformBufferPair.dynamicBuffer.m_Mapped;
+		uint64_t dest = (uint64_t)firstIndex + (renderID * m_DynamicAlignment); // TODO: Use seperate index into this specific buffer
+		memcpy((void*)(dest), &uniformBufferPair.dynamicBufferData.data, size);
 
-		// Flush to make changes visible to the host 
-		VkMappedMemoryRange mappedMemoryRange{};
+		// Flush to make changes visible to the host
+		VkMappedMemoryRange mappedMemoryRange = {};
 		mappedMemoryRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-		mappedMemoryRange.memory = m_UniformBuffers_Color.dynamicBuffer.m_Memory;
+		mappedMemoryRange.memory = uniformBufferPair.dynamicBuffer.m_Memory;
 		mappedMemoryRange.size = size;
 		vkFlushMappedMemoryRanges(m_Device, 1, &mappedMemoryRange);
 	}
@@ -2083,25 +2177,19 @@ void VulkanRenderer::UpdateUniformBufferDynamic(const GameContext& gameContext, 
 
 void VulkanRenderer::LoadDefaultShaderCode()
 {
-	m_DefaultVertShaderCode = ReadFile(m_DefaultVertShaderFilePath);
+	const std::string shaderDirectory = "resources/shaders/GLSL/spv/";
 
-	if (m_DefaultVertShaderCode.empty())
-	{
-		Logger::LogWarning("Default vert shader code can't be found at " + m_DefaultVertShaderFilePath);
-	}
-	{
-		m_LoadedShaderCode.insert({ m_DefaultVertShaderFilePath, m_DefaultVertShaderCode });
-	}
+	m_ShaderFilePaths = { 
+		{ shaderDirectory + "vk_simple_vert.spv", shaderDirectory + "vk_simple_frag.spv" },
+		{ shaderDirectory + "vk_color_vert.spv", shaderDirectory + "vk_color_frag.spv" },
+	};
 
-	m_DefaultFragShaderCode = ReadFile(m_DefaultFragShaderFilePath);
-
-	if (m_DefaultFragShaderCode.empty())
+	const size_t shaderCount = m_ShaderFilePaths.size();
+	m_LoadedShaderCode.resize(shaderCount);
+	for (size_t i = 0; i < shaderCount; i++)
 	{
-		Logger::LogWarning("Default frag shader code can't be found at " + m_DefaultFragShaderFilePath);
-	}
-	else
-	{
-		m_LoadedShaderCode.insert({ m_DefaultFragShaderFilePath, m_DefaultFragShaderCode });
+		m_LoadedShaderCode[i].vertexShaderCode = ReadFile(m_ShaderFilePaths[i].vertexShaderFilePath);
+		m_LoadedShaderCode[i].fragmentShaderCode = ReadFile(m_ShaderFilePaths[i].fragmentShaderFilePath);
 	}
 }
 
